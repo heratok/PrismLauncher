@@ -1,0 +1,130 @@
+name: Sync upstream
+
+# Keeps the fork current with PrismLauncher while preserving the offline-mode patch.
+#
+# Layout contract:
+#   develop              -> pure mirror of PrismLauncher/develop. Never commit here.
+#   feature/offline-mode -> develop + the offline patch commits. Rebased by this workflow.
+#
+# This workflow lives on feature/offline-mode, which is the fork's default branch, because
+# scheduled workflows only run from the default branch.
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+on:
+  schedule:
+    # Mondays at 06:00 UTC.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  sync:
+    name: Rebase patch branch onto upstream
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      issues: write
+
+    env:
+      UPSTREAM_REPO: PrismLauncher/PrismLauncher
+      UPSTREAM_BRANCH: develop
+      PATCH_BRANCH: feature/offline-mode
+
+    steps:
+      - name: Checkout patch branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.PATCH_BRANCH }}
+          fetch-depth: 0
+
+      - name: Configure git and remotes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch --no-tags upstream "${UPSTREAM_BRANCH}"
+          git fetch --no-tags origin "${UPSTREAM_BRANCH}"
+
+      - name: Measure drift
+        id: drift
+        run: |
+          behind=$(git rev-list --count "HEAD..upstream/${UPSTREAM_BRANCH}")
+          ahead=$(git rev-list --count "upstream/${UPSTREAM_BRANCH}..HEAD")
+          echo "patch commits: ${ahead}, upstream commits missing: ${behind}"
+          {
+            echo "behind=${behind}"
+            echo "ahead=${ahead}"
+          } >> "$GITHUB_OUTPUT"
+
+      # Fast-forward only. develop is a mirror by contract, so a rejected push means someone
+      # committed there and the run should fail loudly instead of discarding work.
+      - name: Mirror upstream into develop
+        run: |
+          git push origin "upstream/${UPSTREAM_BRANCH}:refs/heads/${UPSTREAM_BRANCH}"
+
+      - name: Rebase patch branch
+        id: rebase
+        if: steps.drift.outputs.behind != '0'
+        run: |
+          if ! git rebase "upstream/${UPSTREAM_BRANCH}"; then
+            git diff --name-only --diff-filter=U > "${RUNNER_TEMP}/conflicts.txt" || true
+            git rebase --abort || true
+            exit 1
+          fi
+
+      - name: Push rebased branch
+        if: steps.drift.outputs.behind != '0'
+        run: |
+          git log --oneline -1
+          git push --force-with-lease origin "${PATCH_BRANCH}"
+
+      - name: Close stale conflict issue
+        if: success() && steps.rebase.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --json number,title \
+            --jq '[.[] | select(.title | startswith("Upstream sync failed"))][0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue close "$existing" --repo "$GITHUB_REPOSITORY" \
+              --comment "Rebase onto upstream succeeded on run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}."
+          fi
+
+      - name: Open or update conflict issue
+        if: failure() && steps.rebase.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "The scheduled sync could not rebase \`${PATCH_BRANCH}\` onto \`${UPSTREAM_REPO}@${UPSTREAM_BRANCH}\`."
+            echo
+            echo "Conflicting files:"
+            echo '```'
+            cat "${RUNNER_TEMP}/conflicts.txt" 2>/dev/null || echo "(not captured)"
+            echo '```'
+            echo
+            echo "Resolve locally:"
+            echo '```bash'
+            echo "git fetch upstream"
+            echo "git checkout ${PATCH_BRANCH}"
+            echo "git rebase upstream/${UPSTREAM_BRANCH}"
+            echo '```'
+            echo
+            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > "${RUNNER_TEMP}/issue-body.md"
+
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --json number,title \
+            --jq '[.[] | select(.title | startswith("Upstream sync failed"))][0].number // empty')
+
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file "${RUNNER_TEMP}/issue-body.md"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "Upstream sync failed: rebase conflict on ${PATCH_BRANCH}" \
+              --body-file "${RUNNER_TEMP}/issue-body.md"
+          fi

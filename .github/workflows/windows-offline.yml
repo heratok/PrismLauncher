@@ -12,7 +12,9 @@ on:
         type: string
         default: Release
   push:
-    branches: [feature/offline-mode, develop, master, main]
+    # Only the patched branch. Building pristine develop/main would upload an artifact without
+    # the offline patch, and the weekly upstream sync would trigger it for nothing.
+    branches: [feature/offline-mode]
 
 permissions: {}
 
