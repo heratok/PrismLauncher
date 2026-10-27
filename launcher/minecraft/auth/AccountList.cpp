@@ -579,6 +579,16 @@ bool AccountList::anyAccountIsValid()
     return false;
 }
 
+bool AccountList::anyAccountIsUsable()
+{
+    for (auto account : m_accounts) {
+        if (account->accountType() == AccountType::Offline || account->ownsMinecraft()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void AccountList::fillQueue()
 {
     if (m_defaultAccount && m_defaultAccount->shouldRefresh()) {

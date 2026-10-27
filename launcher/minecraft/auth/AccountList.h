@@ -104,6 +104,10 @@ class AccountList : public QAbstractListModel {
     void setDefaultAccount(MinecraftAccountPtr profileId);
     bool anyAccountIsValid();
 
+    /// True if there is at least one account that can be used to play: either an
+    /// online account that owns Minecraft, or an offline account.
+    bool anyAccountIsUsable();
+
     bool isActive() const;
 
    protected:
