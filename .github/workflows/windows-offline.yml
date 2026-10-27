@@ -1,0 +1,88 @@
+name: Windows (offline fork)
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  workflow_dispatch:
+    inputs:
+      build-type:
+        description: Type of build (Release or Debug)
+        type: string
+        default: Release
+  push:
+    branches: [feature/offline-mode, develop, master, main]
+
+permissions: {}
+
+jobs:
+  build:
+    name: Build (Windows-MinGW-w64)
+    runs-on: windows-2022
+
+    permissions:
+      contents: read
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    env:
+      ARTIFACT_NAME: Windows-MinGW-w64-Qt6
+      BUILD_PLATFORM: official
+      BUILD_TYPE: ${{ inputs.build-type || 'Release' }}
+      CMAKE_PRESET: ci
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: true
+
+      - name: Setup dependencies
+        id: setup-dependencies
+        uses: ./.github/actions/setup-dependencies
+        with:
+          build-type: ${{ env.BUILD_TYPE }}
+          artifact-name: Windows-MinGW-w64
+          msystem: CLANG64
+          vcvars-arch: amd64_x86
+          qt-version: 6.11.2
+
+      - name: Configure project
+        run: |
+          cmake --preset "$CMAKE_PRESET" -D VCPKG_HOST_TRIPLET="$VCPKG_TRIPLET" -D VCPKG_TARGET_TRIPLET="$VCPKG_TRIPLET"
+
+      - name: Run build
+        run: |
+          cmake --build --preset "$CMAKE_PRESET" --config "$BUILD_TYPE"
+
+      - name: Run tests
+        env:
+          MSYS2_PATH_TYPE: inherit
+        run: |
+          ctest --preset "$CMAKE_PRESET" --build-config "$BUILD_TYPE"
+
+      - name: Get short version
+        id: short-version
+        shell: bash
+        run: |
+          echo "version=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      # Fork builds have no Azure Trusted Signing credentials. CI_HAS_ACCESS_TO_AZURE and the
+      # azure-* inputs resolve to empty strings, so the action skips signing and only emits an
+      # unsigned-build warning; the artifact is still produced.
+      - name: Package (Windows)
+        uses: ./.github/actions/package/windows
+        env:
+          CI_HAS_ACCESS_TO_AZURE: ${{ vars.CI_HAS_ACCESS_TO_AZURE || '' }}
+        with:
+          version: ${{ steps.short-version.outputs.version }}
+          build-type: ${{ steps.setup-dependencies.outputs.build-type }}
+          artifact-name: Windows-MinGW-w64
+          msystem: CLANG64
+
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
