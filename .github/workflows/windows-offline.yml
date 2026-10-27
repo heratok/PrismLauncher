@@ -15,6 +15,10 @@ on:
     # Only the patched branch. Building pristine develop/main would upload an artifact without
     # the offline patch, and the weekly upstream sync would trigger it for nothing.
     branches: [feature/offline-mode]
+    # A docs-only commit does not produce a different binary.
+    paths-ignore:
+      - '**.md'
+      - 'odd/**'
 
 permissions: {}
 

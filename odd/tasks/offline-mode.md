@@ -59,6 +59,29 @@ Note on CI: `build.yml` is intentionally left untouched. It already exposes
 Adding `push` there would instead run the full Linux/macOS/arm64 matrix on every push to the
 fork, which is wasteful and can go red on missing signing secrets.
 
+- [ ] T7 — `.github/workflows/sync-upstream.yml`: weekly scheduled sync that mirrors
+      `PrismLauncher/develop` into the fork's `develop` and rebases
+      `feature/offline-mode` on top, opening an issue when the rebase conflicts.
+
+## Fork maintenance model
+
+| Branch | Role |
+| --- | --- |
+| `develop` | Pure mirror of `PrismLauncher/develop`. Never committed to. |
+| `feature/offline-mode` | `develop` + the patch commits. Fork default branch, so scheduled workflows run. |
+
+The sync workflow aborts before pushing on conflict, so the published branch is never left
+half-rebased. `feature/offline-mode` must stay the default branch: GitHub only runs
+`scheduled` workflows from the default branch.
+
+Do not run a bare `gh repo sync heratok/PrismLauncher`: the default branch is the patched
+one, and the sync would try to overwrite it with upstream. Use
+`gh repo sync heratok/PrismLauncher --branch develop` if a manual mirror is ever needed.
+
+Scheduled workflows are disabled after 60 days without repository activity; the sync
+workflow re-enables that clock whenever upstream moves. `workflow_dispatch` remains
+available at all times.
+
 ## Acceptance criteria
 
 - With zero Microsoft accounts, "Add Offline" opens the name dialog and creates an account.
@@ -90,7 +113,13 @@ no pull request to upstream (the gate is deliberate upstream policy).
       accounts exist.
 - [x] T5 — `VersionPage::on_actionDownload_All_triggered()` accepts offline accounts.
 - [x] T6 — `windows-offline.yml` added.
+- [x] T7 — `sync-upstream.yml` added; fork default branch set to `feature/offline-mode`.
 - [x] Static review: no remaining `anyAccountIsValid()` call sites for play/launch gating;
       the method itself is untouched.
-- [ ] CI verification pending: no local Qt 6 / CMake / MSVC toolchain on the dev machine, so
-      compilation is proven by the `Windows (offline fork)` workflow run.
+- [x] CI verification: run 40431633401 — `Windows (offline fork)` green on every step
+      (setup dependencies, configure, build, tests, package). Artifacts:
+      `PrismLauncher-Windows-MinGW-w64-{Portable,Setup}-e888664-Release`.
+- [x] Sync verification: run 40436430477 — drift measured as 3 patch commits / 0 upstream
+      commits missing, mirror push reported up-to-date, rebase correctly skipped.
+- [ ] Untested until upstream actually moves: the rebase-with-drift path and the
+      conflict-to-issue path.
